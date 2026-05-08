@@ -9,6 +9,11 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.capstone.ui.theme.CapstoneTheme
+import android.util.Log
+import androidx.lifecycle.lifecycleScope
+import com.example.capstone.data.local.database.DatabaseProvider
+import com.example.capstone.data.local.entity.DispenseLogEntity
+import kotlinx.coroutines.launch
 
 private sealed class AppScreen {
     object Home : AppScreen()
@@ -32,6 +37,20 @@ class MainActivity : ComponentActivity() {
             CapstoneTheme {
                 AppNavigation()
             }
+        }
+
+        val database = DatabaseProvider.getDatabase(this)
+
+        lifecycleScope.launch {
+            val logId = database.dispenseLogDao().insertLog(
+                DispenseLogEntity(
+                    finalResult = "NORMAL",
+                    errorCount = 0,
+                    remark = "Room DB 테스트 저장"
+                )
+            )
+
+            Log.e("RoomTest", "저장된 logId: $logId")
         }
     }
 }
