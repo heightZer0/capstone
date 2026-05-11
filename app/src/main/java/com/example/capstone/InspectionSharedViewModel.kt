@@ -17,6 +17,13 @@ class InspectionSharedViewModel(
     private val repository: InspectionRepository = DummyInspectionRepository()
 ) : ViewModel() {
 
+    var isResultSavedToDb by mutableStateOf(false)
+        private set
+
+    fun markResultSavedToDb() {
+        isResultSavedToDb = true
+    }
+
     // 촬영 타이머
     private val _elapsedSeconds = MutableStateFlow(0)
     val elapsedSeconds: StateFlow<Int> = _elapsedSeconds
@@ -61,6 +68,7 @@ class InspectionSharedViewModel(
         isAnalysisComplete = false
         inspectionResult = null
         _elapsedSeconds.value = 0
+        isResultSavedToDb = false
     }
 
     override fun onCleared() {

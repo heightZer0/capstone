@@ -18,4 +18,7 @@ interface ResultDao {
 
     @Query("SELECT * FROM result WHERE analysis_id = :analysisId")
     suspend fun getResultById(analysisId: Int): ResultEntity?
+
+    @Query("SELECT MAX(analysis_id) FROM result")
+    suspend fun getLatestAnalysisId(): Int?
 }

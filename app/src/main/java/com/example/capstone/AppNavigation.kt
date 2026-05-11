@@ -6,6 +6,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.capstone.screen.*
+import com.example.capstone.viewmodel.DispenseViewModel
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 
 // ── 라우트 상수 ───────────────────────────────────────────────────
 object Routes {
@@ -26,6 +29,7 @@ fun AppNavigation() {
     // Camera → Loading → Result 사이에 공유되는 ViewModel
     // (NavGraph 스코프이므로 세 화면 모두 같은 인스턴스를 사용)
     val inspectionVm: InspectionSharedViewModel = viewModel()
+    val dispenseVm: DispenseViewModel = viewModel()
 
     NavHost(
         navController  = navController,
@@ -103,6 +107,18 @@ fun AppNavigation() {
         // ── Result ──────────────────────────────────────────────
         composable(Routes.RESULT) {
             val result = inspectionVm.inspectionResult
+
+            LaunchedEffect(result) {
+                if (result != null && !inspectionVm.isResultSavedToDb) {
+                    dispenseVm.saveInspectionResult(
+                        isError = result.isError,
+                        errorPouchNumbers = result.errorPouchNumbers,
+                        elapsedSeconds = result.elapsedSeconds
+                    )
+
+                    inspectionVm.markResultSavedToDb()
+                }
+            }
 
             if (result == null) {
                 // 결과 없음 – 홈으로 fallback
