@@ -1,0 +1,26 @@
+# 파이프라인 실행 환경
+# conda 환경 이름: pill
+# mmdetection 별도 설치 필요 (아래 참고)
+
+# 딥러닝
+torch>=2.0.0
+torchvision>=0.15.0
+
+# mmdetection (순서대로 설치)
+# pip install -U openmim
+# mim install mmengine
+# mim install "mmcv>=2.0.0"
+# mim install mmdet
+
+# 영상 처리
+opencv-python>=4.8.0
+scipy>=1.10.0
+
+# OCR
+easyocr>=1.7.0
+
+# API 서버
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-multipart>=0.0.9
+pyngrok>=7.0.0
