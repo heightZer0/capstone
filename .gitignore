@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 *.iml
 .gradle
 /local.properties
@@ -13,3 +14,47 @@
 .externalNativeBuild
 .cxx
 local.properties
+=======
+# 모델 가중치
+*.pth
+*.onnx
+
+# 영상 파일
+*.mp4
+*.avi
+*.mov
+
+# 학습 데이터
+data/
+
+# 임시/출력 파일
+compare/
+inference_outputs/
+backup_best/
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+
+# 각종 로그
+*.log
+train_log.txt
+
+# 데이터 처리용 스크립트 (불필요)
+category_converter.py
+check_pill.py
+extract_frame.py
+fix_json.py
+merge.py
+move_data.py
+remove_duplicates.py
+split_copy.py
+splita_data.py
+rtmdet_tiny_pill_auhub_failed.py
+plan.md
+=2.0.0
+tools/
+
+# 기타
+.DS_Store
+>>>>>>> Stashed changes
