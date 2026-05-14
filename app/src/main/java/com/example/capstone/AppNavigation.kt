@@ -6,13 +6,16 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.capstone.screen.*
+import com.example.capstone.StatisticsViewModel
 
 // ── 라우트 상수 ───────────────────────────────────────────────────
 object Routes {
     const val SPLASH      = "splash"
     const val ONBOARDING  = "onboarding"
     const val HOME        = "home"
-    const val STATISTICS      = "statistics"
+    const val STATISTICS  = "statistics"
+    const val DETAIL      = "detail"
+    const val VIDEO       = "video"
     const val CAMERA      = "camera"
     const val LOADING     = "loading"
     const val RESULT      = "result"
@@ -56,22 +59,41 @@ fun AppNavigation() {
         // ── Home ────────────────────────────────────────────────
         composable(Routes.HOME) {
             HomeScreen(
+                sharedVm          = inspectionVm,
                 onStartClick      = {
                     inspectionVm.resetAnalysis()
                     navController.navigate(Routes.CAMERA)
                 },
                 onStatisticsClick = {
-                    navController.navigate(Routes.STATISTICS)  // ← ONBOARDING에서 변경
+                    navController.navigate(Routes.STATISTICS)
                 },
                 onHelpClick = {
                     navController.navigate(Routes.ONBOARDING)
+                },
+                onInspectionItemClick = { id ->
+                    navController.navigate("${Routes.DETAIL}/$id")
                 }
             )
         }
 
         composable(Routes.STATISTICS) {
+            val statsVm: StatisticsViewModel = viewModel()
             StatisticsRootScreen(
-                onBack = { navController.popBackStack() }
+                vm     = statsVm,
+                onBack = { navController.popBackStack() },
+                onInspectionItemClick = { record ->
+                    navController.navigate("${Routes.DETAIL}/${record.id}")
+                }
+            )
+        }
+
+        composable("${Routes.DETAIL}/{analysisId}") { backStackEntry ->
+            val analysisId = backStackEntry.arguments?.getString("analysisId")?.toIntOrNull() ?: 0
+            val statsVm: StatisticsViewModel = viewModel()
+            InspectionDetailScreen(
+                analysisId = analysisId,
+                vm         = statsVm,
+                onBack     = { navController.popBackStack() }
             )
         }
 
@@ -103,31 +125,16 @@ fun AppNavigation() {
         // ── Result ──────────────────────────────────────────────
         composable(Routes.RESULT) {
             val result = inspectionVm.inspectionResult
+            val videoUrl = result?.videoId?.let { "${inspectionVm.serverUrl}/video/$it" }
 
             if (result == null) {
-                // 결과 없음 – 홈으로 fallback
                 HomeScreen(
                     onStartClick      = { navController.navigate(Routes.CAMERA) },
                     onStatisticsClick = {}
                 )
             } else if (result.isError) {
                 ErrorResultScreen(
-                    errorPouchNumbers = result.errorPouchNumbers,
-                    onRetakeCapture   = {
-                        inspectionVm.resetAnalysis()
-                        navController.navigate(Routes.CAMERA) {
-                            popUpTo(Routes.HOME) { inclusive = false }
-                        }
-                    },
-                    onGoHome          = {
-                        navController.navigate(Routes.HOME) {
-                            popUpTo(Routes.HOME) { inclusive = true }
-                        }
-                    }
-                )
-            } else {
-                NormalResultScreen(
-                    elapsedSeconds  = result.elapsedSeconds,
+                    result          = result,
                     onRetakeCapture = {
                         inspectionVm.resetAnalysis()
                         navController.navigate(Routes.CAMERA) {
@@ -138,9 +145,41 @@ fun AppNavigation() {
                         navController.navigate(Routes.HOME) {
                             popUpTo(Routes.HOME) { inclusive = true }
                         }
+                    },
+                    onWatchVideo    = videoUrl?.let { url ->
+                        { navController.navigate("${Routes.VIDEO}?url=${java.net.URLEncoder.encode(url, "UTF-8")}") }
+                    }
+                )
+            } else {
+                NormalResultScreen(
+                    result          = result,
+                    onRetakeCapture = {
+                        inspectionVm.resetAnalysis()
+                        navController.navigate(Routes.CAMERA) {
+                            popUpTo(Routes.HOME) { inclusive = false }
+                        }
+                    },
+                    onGoHome        = {
+                        navController.navigate(Routes.HOME) {
+                            popUpTo(Routes.HOME) { inclusive = true }
+                        }
+                    },
+                    onWatchVideo    = videoUrl?.let { url ->
+                        { navController.navigate("${Routes.VIDEO}?url=${java.net.URLEncoder.encode(url, "UTF-8")}") }
                     }
                 )
             }
+        }
+
+        // ── Video Player ─────────────────────────────────────────
+        composable("${Routes.VIDEO}?url={url}") { backStackEntry ->
+            val url = backStackEntry.arguments?.getString("url")?.let {
+                java.net.URLDecoder.decode(it, "UTF-8")
+            } ?: ""
+            VideoPlayerScreen(
+                videoUrl = url,
+                onBack   = { navController.popBackStack() }
+            )
         }
     }
 }

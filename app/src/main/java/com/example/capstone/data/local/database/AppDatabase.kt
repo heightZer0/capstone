@@ -18,7 +18,7 @@ import com.example.capstone.data.local.entity.ResultEntity
         ErrorCodeEntity::class,
         ErrorObjectEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

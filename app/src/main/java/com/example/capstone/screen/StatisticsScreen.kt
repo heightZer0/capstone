@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.capstone.StatisticsViewModel
 import com.example.capstone.ui.theme.CapstoneTheme
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -85,24 +86,25 @@ private sealed class StatScreen {
 
 @Composable
 fun StatisticsRootScreen(
-    onBack: () -> Unit,                          // 홈으로 돌아가기
-    onInspectionItemClick: (InspectionRecord) -> Unit = {}, // 상세 화면 연결 예정
+    vm: StatisticsViewModel,
+    onBack: () -> Unit,
+    onInspectionItemClick: (InspectionRecord) -> Unit = {},
 ) {
     var currentScreen by remember { mutableStateOf<StatScreen>(StatScreen.DateSelection) }
+    val availableDates by vm.availableDates.collectAsState(initial = emptySet())
 
     when (val screen = currentScreen) {
         is StatScreen.DateSelection -> {
             DateSelectionScreen(
                 onBack = onBack,
+                availableDates = availableDates,
                 onDateConfirmed = { date ->
                     currentScreen = StatScreen.InspectionList(date)
                 },
             )
         }
         is StatScreen.InspectionList -> {
-            val records = remember(screen.date) {
-                InspectionDummyData.getRecordsForDate(screen.date)
-            }
+            val records by vm.getRecordsForDate(screen.date).collectAsState(initial = emptyList())
             InspectionListScreen(
                 selectedDate = screen.date,
                 records = records,
@@ -121,12 +123,12 @@ fun StatisticsRootScreen(
 @Composable
 fun DateSelectionScreen(
     onBack: () -> Unit,
+    availableDates: Set<LocalDate> = emptySet(),
     onDateConfirmed: (LocalDate) -> Unit,
 ) {
     val today = remember { LocalDate.now() }
     var selectedDate by remember { mutableStateOf(today) }
     var currentYearMonth by remember { mutableStateOf(YearMonth.from(today)) }
-    val availableDates = remember { InspectionDummyData.getAvailableDates() }
 
     val primaryBlue = Color(0xFF2563EB)
 
@@ -622,5 +624,203 @@ private fun InspectionListScreenPreview() {
             onBack = {},
             onItemClick = {},
         )
+    }
+}
+
+// ──────────────────────────────────────────────
+// 6. 검사 상세 화면
+// ──────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InspectionDetailScreen(
+    analysisId: Int,
+    vm: com.example.capstone.StatisticsViewModel,
+    onBack: () -> Unit
+) {
+    val primaryBlue  = Color(0xFF2563EB)
+    val errorRed     = Color(0xFFDC2626)
+    val normalGreen  = Color(0xFF22C55E)
+    val textSecondary = Color(0xFF6B7280)
+
+    val result by vm.getResultById(analysisId).collectAsState(initial = null)
+    val errors by vm.getErrorsForAnalysis(analysisId).collectAsState(initial = emptyList())
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "검사 상세",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "뒤로가기")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = primaryBlue,
+                    titleContentColor = Color.White,
+                    navigationIconContentColor = Color.White
+                )
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { innerPadding ->
+        if (result == null) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(innerPadding),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = primaryBlue)
+            }
+            return@Scaffold
+        }
+
+        val r = result!!
+        val isError = r.resultCode == "ERROR"
+        val statusColor = if (isError) errorRed else normalGreen
+        val fmt = remember { java.time.format.DateTimeFormatter.ofPattern("yyyy.MM.dd HH:mm") }
+        val dateStr = remember(r.analyzedTime) {
+            java.time.Instant.ofEpochMilli(r.analyzedTime)
+                .atZone(java.time.ZoneId.systemDefault())
+                .format(fmt)
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(innerPadding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // 상태 배너
+            item {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = statusColor.copy(alpha = 0.1f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(statusColor.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                if (isError) "✕" else "✓",
+                                color = statusColor,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Column {
+                            Text(
+                                if (isError) "오류 발견" else "검사 정상",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = statusColor
+                            )
+                            Text(dateStr, fontSize = 13.sp, color = textSecondary)
+                        }
+                    }
+                }
+            }
+
+            // 요약 카드
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text("검사 요약", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        HorizontalDivider()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("총 봉지 수", fontSize = 14.sp, color = textSecondary)
+                            Text("${r.totalPouches}개", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("오류 봉지", fontSize = 14.sp, color = textSecondary)
+                            Text(
+                                "${r.errorCount}개",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (r.errorCount > 0) errorRed else normalGreen
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 전체 봉지 목록
+            if (r.totalPouches > 0) {
+                item {
+                    Text(
+                        "봉지별 결과 (${r.totalPouches}개)",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = textSecondary
+                    )
+                }
+                val errorPouchNos = errors.map { it.pouchNo }.toSet()
+                items(r.totalPouches) { idx ->
+                    val pouchNo = idx + 1
+                    val isErrPouch = pouchNo in errorPouchNos
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isErrPouch) Color(0xFFFFF5F5) else MaterialTheme.colorScheme.surface
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "${pouchNo}번 봉지",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            if (isErrPouch) {
+                                Surface(shape = RoundedCornerShape(4.dp), color = errorRed) {
+                                    Text(
+                                        "오류",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            } else {
+                                Text("✓", fontSize = 14.sp, color = normalGreen, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

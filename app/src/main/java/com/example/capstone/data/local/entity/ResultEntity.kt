@@ -13,6 +13,12 @@ data class ResultEntity(
     @ColumnInfo(name = "result_code")
     val resultCode: String,
 
+    @ColumnInfo(name = "total_pouches")
+    val totalPouches: Int = 0,
+
+    @ColumnInfo(name = "error_count")
+    val errorCount: Int = 0,
+
     @ColumnInfo(name = "summary_text")
     val summaryText: String? = null,
 

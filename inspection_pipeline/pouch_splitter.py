@@ -3,9 +3,9 @@ import numpy as np
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks
 
-# 카메라 고정 ROI (1080x1080 기준, 실제 환경에 맞게 조정)
-ROI_Y_TOP    = 200
-ROI_Y_BOTTOM = 800
+# 카메라 고정 ROI (1280x720 기준)
+ROI_Y_TOP    = 100
+ROI_Y_BOTTOM = 620
 
 MIN_POUCH_WIDTH  = 150   # 탐지할 최소 파우치 너비 (px)
 TEXT_AREA_RATIO  = 0.55  # 파우치 왼쪽 중 텍스트 영역 비율

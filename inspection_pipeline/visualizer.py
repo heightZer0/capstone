@@ -57,10 +57,11 @@ def draw_results(frame: np.ndarray, pouches: list[dict]) -> np.ndarray:
                         (x0 + bx1, y0 + by1 - 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
-        # 파우치 번호 + 상태 텍스트 (순번 ID 우선, OCR 번호 보조)
-        pouch_id   = p.get('pouch_id', '?')
-        label_text = f"#{pouch_id}  알약:{summary.get('total', 0)}"
-        out = _put_korean(out, label_text, (x0 + 4, y0 + 4),
-                          color=(0, 80, 255) if has_error else (0, 255, 80))
+        # 파우치 번호 + 상태 텍스트
+        pouch_id = p.get('pouch_id', '?')
+        label_text = f"#{pouch_id}  Pill:{summary.get('total', 0)}"
+        label_color = (0, 80, 255) if has_error else (0, 255, 80)
+        cv2.putText(out, label_text, (x0 + 4, y0 + 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, label_color, 2)
 
     return out

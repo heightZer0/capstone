@@ -23,6 +23,14 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.style.TextOverflow
+import com.example.capstone.InspectionSharedViewModel
 
 // ────────────────────────────────────────────────────────────────
 // 1. Data Layer  ← 나중에 DB/Repository로 교체할 부분
@@ -75,11 +83,49 @@ private val TextSecondary = Color(0xFF6B7280)
 
 @Composable
 fun HomeScreen(
+    sharedVm: InspectionSharedViewModel? = null,
     onStartClick: () -> Unit = {},          // → CameraScreen
     onStatisticsClick: () -> Unit = {},
-    onHelpClick: () -> Unit = {}, // → DatePickerScreen
+    onHelpClick: () -> Unit = {},
+    onInspectionItemClick: (Int) -> Unit = {},
     recentInspections: List<RecentInspectionItem> = dummyRecentInspections  // ← DB 교체 포인트
 ) {
+    // ── DB에서 최근 검사 결과 ─────────────────────────────────────
+    val recentInspections by (sharedVm?.recentResults ?: kotlinx.coroutines.flow.flowOf(dummyRecentInspections))
+        .collectAsState(initial = dummyRecentInspections)
+
+    // ── 서버 URL 설정 다이얼로그 ──────────────────────────────────
+    var showUrlDialog by remember { mutableStateOf(false) }
+    var urlInput      by remember { mutableStateOf(sharedVm?.serverUrl ?: "") }
+
+    if (showUrlDialog) {
+        AlertDialog(
+            onDismissRequest = { showUrlDialog = false },
+            title = { Text("서버 URL 설정") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Colab에서 발급받은 ngrok URL을 입력하세요.", fontSize = 13.sp, color = TextSecondary)
+                    OutlinedTextField(
+                        value = urlInput,
+                        onValueChange = { urlInput = it },
+                        placeholder = { Text("https://xxxx.ngrok-free.app") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    sharedVm?.serverUrl = urlInput.trim()
+                    showUrlDialog = false
+                }) { Text("저장") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUrlDialog = false }) { Text("취소") }
+            }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -87,7 +133,7 @@ fun HomeScreen(
         contentPadding = PaddingValues(bottom = 32.dp)
     ) {
         // 헤더
-        item { HomeHeader(onHelpClick = onHelpClick) }
+        item { HomeHeader(onHelpClick = onHelpClick, onSettingsClick = { showUrlDialog = true }) }
 
         // 본문 패딩 영역
         item {
@@ -97,6 +143,13 @@ fun HomeScreen(
             ) {
                 Spacer(modifier = Modifier.height(4.dp))
                 GuideCard()
+                // 서버 URL 상태 카드
+                if (sharedVm != null) {
+                    ServerUrlCard(
+                        url = sharedVm.serverUrl,
+                        onChangeClick = { urlInput = sharedVm.serverUrl; showUrlDialog = true }
+                    )
+                }
                 ActionButtons(
                     onStartClick = onStartClick,
                     onStatisticsClick = onStatisticsClick
@@ -111,15 +164,15 @@ fun HomeScreen(
             )
         }
 
-        // 최근 검사 결과 리스트
-        // DB 연결 시: recentInspections 를 ViewModel StateFlow로 교체
+        // 최근 검사 결과 리스트 (DB 연동)
         items(
             items = recentInspections,
             key = { it.id }
         ) { item ->
             RecentInspectionRow(
                 item = item,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                onClick = { onInspectionItemClick(item.id.toInt()) }
             )
         }
     }
@@ -130,7 +183,7 @@ fun HomeScreen(
 // ────────────────────────────────────────────────────────────────
 
 @Composable
-private fun HomeHeader(onHelpClick: () -> Unit = {}) {
+private fun HomeHeader(onHelpClick: () -> Unit = {}, onSettingsClick: () -> Unit = {}) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -171,15 +224,59 @@ private fun HomeHeader(onHelpClick: () -> Unit = {}) {
             }
         }
 
-        IconButton(
-            onClick = onHelpClick,
-            modifier = Modifier.align(Alignment.CenterEnd)
+        Row(modifier = Modifier.align(Alignment.CenterEnd)) {
+            IconButton(onClick = onSettingsClick) {
+                Icon(Icons.Default.Settings, contentDescription = "서버 설정", tint = Color.White)
+            }
+            IconButton(onClick = onHelpClick) {
+                Icon(Icons.Default.HelpOutline, contentDescription = "도움말", tint = Color.White)
+            }
+        }
+    }
+}
+
+// ── 서버 URL 상태 카드 ─────────────────────────────────────────────
+@Composable
+private fun ServerUrlCard(url: String, onChangeClick: () -> Unit) {
+    val isConnected = url.isNotBlank()
+    Card(
+        modifier  = Modifier.fillMaxWidth(),
+        shape     = RoundedCornerShape(12.dp),
+        colors    = CardDefaults.cardColors(containerColor = CardBg),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Icon(
-                imageVector = Icons.Default.HelpOutline,
-                contentDescription = "도움말",
-                tint = Color.White
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(if (isConnected) NormalGreen else ErrorRed)
+                )
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("서버 연결", fontSize = 13.sp, color = TextSecondary)
+                    Text(
+                        text = if (isConnected) url else "미설정",
+                        fontSize = 13.sp,
+                        color = if (isConnected) TextPrimary else ErrorRed,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            TextButton(onClick = onChangeClick) {
+                Text("변경", fontSize = 13.sp, color = PrimaryBlue)
+            }
         }
     }
 }
@@ -331,13 +428,15 @@ private fun RecentResultsHeader(modifier: Modifier = Modifier) {
 @Composable
 private fun RecentInspectionRow(
     item: RecentInspectionItem,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {}
 ) {
     val isError     = item.status == InspectionStatus.ERROR
     val statusColor = if (isError) ErrorRed else NormalGreen
     val statusText  = if (isError) item.errorDetail ?: "오류 발견" else "검사 정상"
 
     Card(
+        onClick = onClick,
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = CardBg),

@@ -5,11 +5,13 @@
     python pipeline.py --input ../data/test.mp4 --output output.mp4 --skip 5
 """
 import argparse
+import base64
 import cv2
 import numpy as np
+import subprocess
 import time
 
-from pouch_splitter import split_pouches, get_roi, ROI_Y_TOP
+from pouch_splitter import split_pouches, get_roi, ROI_Y_TOP, ROI_Y_BOTTOM
 from ocr_reader import read_pouch_info
 from pill_detector import detect_pills_in_roi, assign_detections_to_pouches, CountStabilizer
 from visualizer import draw_results
@@ -224,7 +226,7 @@ def run_video(input_path: str, output_path: str,
             break
 
         run_det = (frame_idx % det_skip == 0)
-        run_ocr = (frame_idx % ocr_skip == 0)
+        run_ocr = False
 
         if run_det or run_ocr:
             last_pouches = process_frame(frame,
@@ -342,28 +344,50 @@ def run_video(input_path: str, output_path: str,
             print("  오류 없음")
 
 
-def analyze_video(input_path: str, det_skip: int = 2, ocr_skip: int = 30) -> dict:
-    """비디오 분석 후 결과 dict 반환 (API 서버용, 출력 영상 없음)"""
+def analyze_video(input_path: str, output_path: str = None,
+                  det_skip: int = 2, ocr_skip: int = 30) -> dict:
+    """비디오 분석 후 결과 dict 반환 (API 서버용)"""
     cap    = cv2.VideoCapture(input_path)
     width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps    = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
-    frame_idx       = 0
-    last_pouches    = []
-    stabilizer      = CountStabilizer(window=15)
-    tracker         = PouchTracker(max_dist=250, max_missing=30)
-    pattern_monitor = PatternMonitor()
-    count_history: dict = {}
+    ffmpeg_proc = None
+    if output_path:
+        ffmpeg_proc = subprocess.Popen(
+            ['ffmpeg', '-y',
+             '-f', 'rawvideo', '-vcodec', 'rawvideo',
+             '-s', f'{width}x{height}',
+             '-pix_fmt', 'bgr24', '-r', str(fps),
+             '-i', 'pipe:0',
+             '-vcodec', 'libx264', '-preset', 'fast',
+             '-pix_fmt', 'yuv420p',
+             '-g', '30',
+             '-movflags', '+faststart',
+             output_path],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+    frame_idx         = 0
+    last_pouches      = []
+    stabilizer        = CountStabilizer(window=15)
+    tracker           = PouchTracker(max_dist=250, max_missing=30)
+    pattern_monitor   = PatternMonitor()
+    count_history: dict   = {}
     pending_confirm: dict = {}
-    prev_pouch_ids: set  = set()
-    CONFIRM_DELAY        = 8
-    t_start              = time.time()
+    prev_pouch_ids: set   = set()
+    pouch_best_frame: dict = {}   # pid -> (frame, pouch_dict) 오류 봉지 사진용
+    CONFIRM_DELAY         = 8
+    t_start               = time.time()
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         run_det = (frame_idx % det_skip == 0)
-        run_ocr = (frame_idx % ocr_skip == 0)
+        run_ocr = False
         if run_det or run_ocr:
             last_pouches = process_frame(frame, run_det=run_det, run_ocr=run_ocr,
                                          last_pouches=last_pouches)
@@ -378,6 +402,7 @@ def analyze_video(input_path: str, det_skip: int = 2, ocr_skip: int = 30) -> dic
                 count = p['summary']['total']
                 if count > 0:
                     count_history.setdefault(pid, []).append(count)
+                    pouch_best_frame[pid] = (frame.copy(), dict(p))
             for pid in prev_pouch_ids - curr_pouch_ids:
                 pending_confirm.setdefault(pid, 0)
             for pid in curr_pouch_ids & set(pending_confirm):
@@ -395,8 +420,17 @@ def analyze_video(input_path: str, det_skip: int = 2, ocr_skip: int = 30) -> dic
                 final_count = max(set(history), key=history.count)
                 pattern_monitor.record(pid, final_count, history=history)
             prev_pouch_ids = curr_pouch_ids
+
+        if ffmpeg_proc is not None:
+            annotated = draw_results(frame, last_pouches)
+            ffmpeg_proc.stdin.write(annotated.tobytes())
+
         frame_idx += 1
+
     cap.release()
+    if ffmpeg_proc is not None:
+        ffmpeg_proc.stdin.close()
+        ffmpeg_proc.wait()
 
     elapsed        = int(time.time() - t_start)
     records        = pattern_monitor.records
@@ -408,11 +442,25 @@ def analyze_video(input_path: str, det_skip: int = 2, ocr_skip: int = 30) -> dic
             r['expected'] = exp
             r['error']    = (r['count'] != exp)
     errors = [r for r in sorted_records if r.get('error')]
+
+    error_crops: dict = {}
+    for r in errors:
+        pid = r['pouch_id']
+        if pid in pouch_best_frame:
+            f, p = pouch_best_frame[pid]
+            crop = f[p['y_start']:p['y_end'], p['x_start']:p['x_end']]
+            for d in p.get('detections', []):
+                bx1, by1, bx2, by2 = [int(v) for v in d['bbox']]
+                cv2.rectangle(crop, (bx1, by1), (bx2, by2), (0, 200, 255), 2)
+            _, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            error_crops[str(pid)] = base64.b64encode(buf).decode()
+
     return {
         'isError':           len(errors) > 0,
         'errorPouchNumbers': [r['pouch_id'] for r in errors],
         'elapsedSeconds':    elapsed,
         'pattern':           final_pattern,
+        'errorCrops':        error_crops,
         'pouches': [
             {'pouchId':  r['pouch_id'],
              'count':    r['count'],

@@ -1,13 +1,18 @@
 package com.example.capstone.screen
 // 카메라로 약봉지 촬영
 import android.Manifest
+import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.*
 import androidx.camera.view.PreviewView
+import java.io.File
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -16,7 +21,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -55,6 +63,28 @@ fun CameraScreen(
     var showGuideSheet by remember { mutableStateOf(false) }
     val sheetState     = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    // ── 녹화 상태 ─────────────────────────────────────────────────
+    val recordingRef  = remember { mutableStateOf<Recording?>(null) }
+    val outputFile    = remember { File(context.cacheDir, "inspection_${System.currentTimeMillis()}.mp4") }
+    val elapsedHolder = remember { intArrayOf(0) }  // stop 시점 elapsed 캡처용
+    var isStopping    by remember { mutableStateOf(false) }
+
+    // 녹화 완료 후 화면 전환 (main thread 콜백 → LaunchedEffect 경유)
+    var shouldNavigate by remember { mutableStateOf(false) }
+    val currentOnStopCapture by rememberUpdatedState(onStopCapture)
+    LaunchedEffect(shouldNavigate) {
+        if (shouldNavigate) currentOnStopCapture()
+    }
+
+    // 가로 모드 고정 (파이프라인이 1920x1080 가로 영상 기준)
+    DisposableEffect(Unit) {
+        val activity = context as? Activity
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
     // 타이머 시작 & 권한 요청
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) permissionLauncher.launch(Manifest.permission.CAMERA)
@@ -72,11 +102,19 @@ fun CameraScreen(
             .fillMaxSize()
             .background(DarkBg)
     ) {
-        // 카메라 프리뷰
+        // 카메라 프리뷰 — 가로 화면 중앙에 1:1 정사각형
         if (hasCameraPermission) {
             AndroidView(
                 factory = { ctx ->
+                    val executor = ContextCompat.getMainExecutor(ctx)
                     PreviewView(ctx).also { previewView ->
+                        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+                        // VideoCapture 설정
+                        val recorder    = Recorder.Builder()
+                            .setQualitySelector(QualitySelector.from(Quality.HD))
+                            .build()
+                        val videoCapture = VideoCapture.withOutput(recorder)
+
                         ProcessCameraProvider.getInstance(ctx).addListener(
                             {
                                 runCatching {
@@ -86,11 +124,22 @@ fun CameraScreen(
                                         lifecycleOwner,
                                         CameraSelector.DEFAULT_BACK_CAMERA,
                                         Preview.Builder().build()
-                                            .also { it.setSurfaceProvider(previewView.surfaceProvider) }
+                                            .also { it.setSurfaceProvider(previewView.surfaceProvider) },
+                                        videoCapture
                                     )
+                                    // 카메라 바인딩 직후 자동 녹화 시작
+                                    recordingRef.value = videoCapture.output
+                                        .prepareRecording(ctx, FileOutputOptions.Builder(outputFile).build())
+                                        .start(executor) { event ->
+                                            if (event is VideoRecordEvent.Finalize) {
+                                                sharedVm.videoFile = if (!event.hasError()) outputFile else null
+                                                sharedVm.startAnalysis(elapsedHolder[0])
+                                                shouldNavigate = true
+                                            }
+                                        }
                                 }
                             },
-                            ContextCompat.getMainExecutor(ctx)
+                            executor
                         )
                     }
                 },
@@ -99,6 +148,41 @@ fun CameraScreen(
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("카메라 권한이 필요합니다", color = Color.White, fontSize = 16.sp)
+            }
+        }
+
+        // ── ROI 가이드 오버레이 — 1:1 박스와 동일 크기/위치 ──────────
+        // ROI_Y_TOP=100, ROI_Y_BOTTOM=620 (1280x720 기준)
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val roiTop    = size.height * (100f / 720f)
+            val roiBottom = size.height * (620f / 720f)
+            val roiHeight = roiBottom - roiTop
+            val dimColor  = Color.Black.copy(alpha = 0.55f)
+
+            // 위 어두운 영역
+            drawRect(color = dimColor, topLeft = Offset(0f, 0f),
+                     size = Size(size.width, roiTop))
+            // 아래 어두운 영역
+            drawRect(color = dimColor, topLeft = Offset(0f, roiBottom),
+                     size = Size(size.width, size.height - roiBottom))
+            // ROI 테두리
+            drawRect(color = Color.White, topLeft = Offset(0f, roiTop),
+                     size = Size(size.width, roiHeight),
+                     style = Stroke(width = 3f))
+            // 모서리 마커
+            val m = 40f
+            val t = 6f
+            listOf(
+                Offset(0f, roiTop) to Offset(m, roiTop),
+                Offset(0f, roiTop) to Offset(0f, roiTop + m),
+                Offset(size.width - m, roiTop) to Offset(size.width, roiTop),
+                Offset(size.width, roiTop) to Offset(size.width, roiTop + m),
+                Offset(0f, roiBottom - m) to Offset(0f, roiBottom),
+                Offset(0f, roiBottom) to Offset(m, roiBottom),
+                Offset(size.width - m, roiBottom) to Offset(size.width, roiBottom),
+                Offset(size.width, roiBottom - m) to Offset(size.width, roiBottom),
+            ).forEach { (s, e) ->
+                drawLine(color = Color(0xFF00E5FF), start = s, end = e, strokeWidth = t)
             }
         }
 
@@ -153,19 +237,21 @@ fun CameraScreen(
             }
         }
 
-        // 가이드 문구 (상단 중앙)
+        // 가이드 문구 — ROI 바로 위에 표시
         Surface(
             shape = RoundedCornerShape(8.dp),
             color = Color.Black.copy(alpha = 0.65f),
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 90.dp)
+                .fillMaxHeight(0.185f)
+                .wrapContentHeight(Alignment.Bottom)
+                .padding(bottom = 6.dp)
         ) {
             Text(
-                "가이드라인 안에 약봉지를 맞춰주세요",
+                "밝은 영역 안에 컨베이어 벨트를 맞춰주세요",
                 color = Color.White,
-                fontSize = 14.sp,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
 
@@ -192,18 +278,31 @@ fun CameraScreen(
 
             Button(
                 onClick = {
-                    sharedVm.stopTimerAndGetElapsed().also { elapsed ->
-                        sharedVm.startAnalysis(elapsed)
+                    if (!isStopping) {
+                        isStopping = true
+                        elapsedHolder[0] = sharedVm.stopTimerAndGetElapsed()
+                        if (recordingRef.value != null) {
+                            // 녹화 중 → stop() 호출, VideoRecordEvent.Finalize에서 화면 전환
+                            recordingRef.value?.stop()
+                        } else {
+                            // 녹화 미시작(권한 없음 등) → 바로 처리
+                            sharedVm.startAnalysis(elapsedHolder[0])
+                            shouldNavigate = true
+                        }
                     }
-                    onStopCapture()
                 },
+                enabled = !isStopping,
                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth(0.6f)
                     .height(52.dp)
             ) {
-                Text("촬영 종료", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (isStopping) "처리 중..." else "촬영 종료",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
     }
