@@ -25,6 +25,7 @@ interface ResultDao {
     @Query("SELECT * FROM result ORDER BY analyzed_time DESC LIMIT :limit")
     fun getRecentResults(limit: Int): Flow<List<ResultEntity>>
 
+
     @Query("SELECT MAX(analysis_id) FROM result")
     suspend fun getLatestAnalysisId(): Int?
 }

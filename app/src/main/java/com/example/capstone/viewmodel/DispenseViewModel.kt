@@ -21,7 +21,6 @@ class DispenseViewModel(application: Application) : AndroidViewModel(application
 
     fun saveInspectionResult(
         isError: Boolean,
-        totalPouches: Int = 0,
         errorPouchNumbers: List<Int>,
         elapsedSeconds: Int? = null
     ) {
@@ -29,14 +28,13 @@ class DispenseViewModel(application: Application) : AndroidViewModel(application
             if (isError) {
                 repository.saveAnalysisResult(
                     finalResult  = "ERROR",
-                    totalPouches = totalPouches,
                     summaryText  = "${errorPouchNumbers.size}개의 오류 포지가 발견되었습니다.",
                     errorObjects = errorPouchNumbers.map { pouchNo ->
                         ErrorObjectEntity(
-                            analysisId    = 0,
-                            errorCode     = "CNT",
-                            pouchNo       = pouchNo,
-                            errorMessage  = "${pouchNo}번 포지에서 오류가 발견되었습니다."
+                            analysisId   = 0,
+                            errorCode    = "CNT",
+                            pouchNo      = pouchNo,
+                            errorMessage = "${pouchNo}번 포지에서 오류가 발견되었습니다."
                         )
                     },
                     remark = "분석 결과 오류 저장"
@@ -44,7 +42,6 @@ class DispenseViewModel(application: Application) : AndroidViewModel(application
             } else {
                 repository.saveAnalysisResult(
                     finalResult  = "NORMAL",
-                    totalPouches = totalPouches,
                     summaryText  = "정상 포지로 판정되었습니다.",
                     errorObjects = emptyList(),
                     remark       = "분석 결과 정상 저장, 소요 시간: ${elapsedSeconds ?: 0}초"
