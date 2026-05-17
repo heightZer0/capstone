@@ -111,7 +111,8 @@ class ApiInspectionRepository(
             pattern           = pattern,
             pouches           = pouches,
             videoId           = json.optString("videoId").takeIf { it.isNotBlank() },
-            errorCrops        = errorCrops
+            errorCrops        = errorCrops,
+            thumbnailCrop     = json.optString("thumbnailCrop").takeIf { it.isNotBlank() }
         )
     }
 }

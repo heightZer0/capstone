@@ -17,5 +17,6 @@ data class InspectionResult(
     val pattern: List<Int> = emptyList(),              // 감지된 복약 패턴 (예: [2, 2, 1])
     val pouches: List<PouchResult> = emptyList(),      // 봉지별 상세 결과
     val videoId: String? = null,                       // 서버에 저장된 결과 영상 ID
-    val errorCrops: Map<Int, String> = emptyMap()      // 오류 봉지 사진 (pouchId -> base64 jpg)
+    val errorCrops: Map<Int, String> = emptyMap(),     // 오류 봉지 사진 (pouchId -> base64 jpg)
+    val thumbnailCrop: String? = null                  // 대표 썸네일 (첫 번째 봉지 사진)
 )

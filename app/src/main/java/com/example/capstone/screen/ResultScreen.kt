@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,15 +13,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.capstone.InspectionResult
 import com.example.capstone.PouchResult
 
@@ -48,7 +55,7 @@ fun ErrorResultScreen(
     ) {
         LazyColumn(
             modifier       = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 140.dp)
+            contentPadding = PaddingValues(bottom = 210.dp)
         ) {
             // ── 빨간 배너 ─────────────────────────────────────────
             item {
@@ -75,6 +82,9 @@ fun ErrorResultScreen(
                     }
                 }
             }
+
+            // ── 대표 썸네일 ───────────────────────────────────────
+            item { ThumbnailCard(result.thumbnailCrop, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) }
 
             // ── 요약 카드 ─────────────────────────────────────────
             item { SummaryCard(result, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) }
@@ -138,7 +148,7 @@ fun NormalResultScreen(
     ) {
         LazyColumn(
             modifier       = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 140.dp)
+            contentPadding = PaddingValues(bottom = 210.dp)
         ) {
             // ── 초록 배너 ──────────────────────────────────────────
             item {
@@ -164,6 +174,9 @@ fun NormalResultScreen(
                     }
                 }
             }
+
+            // ── 대표 썸네일 ───────────────────────────────────────
+            item { ThumbnailCard(result.thumbnailCrop, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) }
 
             // ── 요약 카드 ─────────────────────────────────────────
             item { SummaryCard(result, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) }
@@ -271,6 +284,10 @@ private fun PouchRow(pouch: PouchResult, displayIndex: Int, cropBase64: String?)
                             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
                         }.getOrNull()
                     }
+                    var showFullscreen by remember { mutableStateOf(false) }
+                    if (showFullscreen && bitmap != null) {
+                        FullscreenImageDialog(bitmap = bitmap, onDismiss = { showFullscreen = false })
+                    }
                     if (bitmap != null) {
                         Image(
                             bitmap             = bitmap,
@@ -279,6 +296,7 @@ private fun PouchRow(pouch: PouchResult, displayIndex: Int, cropBase64: String?)
                             modifier           = Modifier
                                 .size(72.dp)
                                 .background(Color.LightGray, RoundedCornerShape(8.dp))
+                                .clickable { showFullscreen = true }
                         )
                     } else {
                         PhotoPlaceholder()
@@ -327,6 +345,72 @@ private fun PouchRow(pouch: PouchResult, displayIndex: Int, cropBase64: String?)
                         fontWeight = FontWeight.Medium)
                     Text("✓", fontSize = 13.sp, color = NormalGreen)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FullscreenImageDialog(bitmap: ImageBitmap, onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .clickable { onDismiss() },
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                bitmap             = bitmap,
+                contentDescription = null,
+                contentScale       = ContentScale.Fit,
+                modifier           = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThumbnailCard(thumbnailCrop: String?, modifier: Modifier = Modifier) {
+    val bitmap = remember(thumbnailCrop) {
+        thumbnailCrop?.let {
+            runCatching {
+                val bytes = Base64.decode(it, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    var showFullscreen by remember { mutableStateOf(false) }
+    if (showFullscreen && bitmap != null) {
+        FullscreenImageDialog(bitmap = bitmap, onDismiss = { showFullscreen = false })
+    }
+    Card(
+        modifier  = modifier.fillMaxWidth(),
+        shape     = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap             = bitmap,
+                contentDescription = "약봉지 이미지",
+                contentScale       = ContentScale.Crop,
+                modifier           = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .clickable { showFullscreen = true }
+            )
+        } else {
+            Box(
+                modifier         = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .background(Color(0xFFE5E7EB)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("약봉지 이미지", fontSize = 14.sp, color = TextSecondary)
             }
         }
     }

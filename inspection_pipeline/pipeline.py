@@ -289,14 +289,13 @@ def run_video(input_path: str, output_path: str,
         annotated = draw_results(frame, display_pouches)
         out.write(annotated)
 
-        if run_ocr and last_pouches:
+        if run_det and last_pouches and frame_idx % 30 == 0:
             elapsed = time.time() - t_start
             print(f"  [{frame_idx:4d}/{total}] {elapsed:.1f}s | 파우치 {len(last_pouches)}개", end='')
             for p in last_pouches:
-                info = p.get('ocr_info', {})
-                s    = p.get('summary', {})
-                print(f"  #{info.get('number','?')}({info.get('time','')})"
-                      f"{'불량' if s.get('error',0)>0 else 'OK'}", end='')
+                s = p.get('summary', {})
+                pid = p.get('pouch_id', '?')
+                print(f"  #{pid} {'불량' if s.get('error', 0) > 0 else 'OK'}({s.get('total', 0)}알)", end='')
             print()
 
         if show:
@@ -455,12 +454,27 @@ def analyze_video(input_path: str, output_path: str = None,
             _, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
             error_crops[str(pid)] = base64.b64encode(buf).decode()
 
+    # 대표 썸네일 — 정상 봉지 중 첫 번째, 없으면 오류 봉지 중 첫 번째
+    error_pids = {r['pouch_id'] for r in errors}
+    normal_records = [r for r in sorted_records if r['pouch_id'] not in error_pids]
+    thumbnail_candidates = normal_records if normal_records else sorted_records
+    thumbnail_crop = None
+    for r in thumbnail_candidates:
+        pid = r['pouch_id']
+        if pid in pouch_best_frame:
+            f, p = pouch_best_frame[pid]
+            crop = f[p['y_start']:p['y_end'], p['x_start']:p['x_end']]
+            _, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            thumbnail_crop = base64.b64encode(buf).decode()
+            break
+
     return {
         'isError':           len(errors) > 0,
         'errorPouchNumbers': [r['pouch_id'] for r in errors],
         'elapsedSeconds':    elapsed,
         'pattern':           final_pattern,
         'errorCrops':        error_crops,
+        'thumbnailCrop':     thumbnail_crop,
         'pouches': [
             {'pouchId':  r['pouch_id'],
              'count':    r['count'],

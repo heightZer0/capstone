@@ -130,18 +130,6 @@ fun AppNavigation() {
             val result = inspectionVm.inspectionResult
             val videoUrl = result?.videoId?.let { "${inspectionVm.serverUrl}/video/$it" }
 
-            LaunchedEffect(result) {
-                if (result != null && !inspectionVm.isResultSavedToDb) {
-                    dispenseVm.saveInspectionResult(
-                        isError = result.isError,
-                        errorPouchNumbers = result.errorPouchNumbers,
-                        elapsedSeconds = result.elapsedSeconds
-                    )
-
-                    inspectionVm.markResultSavedToDb()
-                }
-            }
-
             if (result == null) {
                 HomeScreen(
                     onStartClick      = { navController.navigate(Routes.CAMERA) },

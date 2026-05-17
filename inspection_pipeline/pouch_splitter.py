@@ -10,7 +10,7 @@ ROI_Y_BOTTOM = 620
 MIN_POUCH_WIDTH  = 150   # 탐지할 최소 파우치 너비 (px)
 TEXT_AREA_RATIO  = 0.55  # 파우치 왼쪽 중 텍스트 영역 비율
 SMOOTH_SIZE      = 30    # column smoothing 커널 크기
-DARK_THR         = 80    # 검은 텍스트 threshold (0~255)
+DARK_THR         = 100   # 검은 텍스트 threshold (0~255)
 TEXT_PROMINENCE  = 3000  # 텍스트 밀도 피크 최소 prominence
 
 
