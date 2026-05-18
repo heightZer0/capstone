@@ -191,6 +191,87 @@ def process_frame(frame, run_det: bool = True, run_ocr: bool = True,
     return pouches
 
 
+def _finalize_batch(pattern_monitor: PatternMonitor,
+                    pouch_best_frame: dict, elapsed: int) -> dict | None:
+    """패턴 모니터 상태를 배치 결과 dict로 변환. 봉지가 없으면 None."""
+    records = pattern_monitor.records
+    if not records:
+        return None
+
+    final_pattern  = pattern_monitor.pattern
+    sorted_records = sorted(records, key=lambda r: r['pouch_id'])
+    if final_pattern:
+        for i, r in enumerate(sorted_records):
+            exp = final_pattern[i % len(final_pattern)]
+            r['expected'] = exp
+            r['error']    = (r['count'] != exp)
+    errors = [r for r in sorted_records if r.get('error')]
+
+    error_crops: dict = {}
+    for r in errors:
+        pid = r['pouch_id']
+        if pid in pouch_best_frame:
+            f, p = pouch_best_frame[pid]
+            crop = f[p['y_start']:p['y_end'], p['x_start']:p['x_end']]
+            for d in p.get('detections', []):
+                bx1, by1, bx2, by2 = [int(v) for v in d['bbox']]
+                cv2.rectangle(crop, (bx1, by1), (bx2, by2), (0, 200, 255), 2)
+            _, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            error_crops[str(pid)] = base64.b64encode(buf).decode()
+
+    # 대표 썸네일 — 전체 ROI 사진 (첫 번째 확정 봉지의 프레임)
+    thumbnail_crop = None
+    for r in sorted_records:
+        pid = r['pouch_id']
+        if pid in pouch_best_frame:
+            f, _ = pouch_best_frame[pid]
+            roi = f[ROI_Y_TOP:ROI_Y_BOTTOM, :]
+            _, buf = cv2.imencode('.jpg', roi, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            thumbnail_crop = base64.b64encode(buf).decode()
+            break
+
+    return {
+        'isError':           bool(errors),
+        'errorPouchNumbers': [r['pouch_id'] for r in errors],
+        'elapsedSeconds':    elapsed,
+        'pattern':           final_pattern,
+        'errorCrops':        error_crops,
+        'thumbnailCrop':     thumbnail_crop,
+        'pouches': [
+            {'pouchId':  r['pouch_id'],
+             'count':    r['count'],
+             'expected': r.get('expected'),
+             'error':    r.get('error', False)}
+            for r in sorted_records
+        ],
+    }
+
+
+def _make_batch_state(batch_start_frame: int = 0) -> dict:
+    return dict(
+        last_pouches     = [],
+        stabilizer       = CountStabilizer(window=15),
+        tracker          = PouchTracker(max_dist=250, max_missing=30),
+        pattern_monitor  = PatternMonitor(),
+        count_history    = {},
+        pending_confirm  = {},
+        prev_pouch_ids   = set(),
+        pouch_best_frame = {},
+        batch_start_frame = batch_start_frame,
+    )
+
+
+def _force_confirm_pending(state: dict, min_history: int = 13) -> None:
+    """pending + 아직 화면에 있는 봉지까지 모두 강제 확정."""
+    all_pids = set(state['pending_confirm']) | set(state['count_history'])
+    for pid in all_pids:
+        history = state['count_history'].pop(pid, [])
+        if len(history) >= min_history:
+            final_count = max(set(history), key=history.count)
+            state['pattern_monitor'].record(pid, final_count, history=history)
+    state['pending_confirm'].clear()
+
+
 def run_video(input_path: str, output_path: str,
               det_skip: int = 1, ocr_skip: int = 30, show: bool = False):
     cap = cv2.VideoCapture(input_path)
@@ -343,146 +424,105 @@ def run_video(input_path: str, output_path: str,
             print("  오류 없음")
 
 
-def analyze_video(input_path: str, output_path: str = None,
-                  det_skip: int = 2, ocr_skip: int = 30) -> dict:
-    """비디오 분석 후 결과 dict 반환 (API 서버용)"""
-    cap    = cv2.VideoCapture(input_path)
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps    = cap.get(cv2.CAP_PROP_FPS) or 30.0
+def analyze_video(input_path: str, det_skip: int = 2) -> dict:
+    """
+    비디오 분석 후 배치별 결과 반환 (API 서버용).
+    5초간 파우치 미탐지 시 새 배치로 분리.
+    반환: {"batches": [{isError, pouches, pattern, ...}, ...]}
+    """
+    cap   = cv2.VideoCapture(input_path)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    fps   = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
-    ffmpeg_proc = None
-    if output_path:
-        ffmpeg_proc = subprocess.Popen(
-            ['ffmpeg', '-y',
-             '-f', 'rawvideo', '-vcodec', 'rawvideo',
-             '-s', f'{width}x{height}',
-             '-pix_fmt', 'bgr24', '-r', str(fps),
-             '-i', 'pipe:0',
-             '-vcodec', 'libx264', '-preset', 'fast',
-             '-pix_fmt', 'yuv420p',
-             '-g', '30',
-             '-movflags', '+faststart',
-             output_path],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+    NO_POUCH_GAP_DET = max(1, int(3.0 * fps / det_skip))  # 3초치 탐지 횟수
+    CONFIRM_DELAY    = 8
 
-    frame_idx         = 0
-    last_pouches      = []
-    stabilizer        = CountStabilizer(window=15)
-    tracker           = PouchTracker(max_dist=250, max_missing=30)
-    pattern_monitor   = PatternMonitor()
-    count_history: dict   = {}
-    pending_confirm: dict = {}
-    prev_pouch_ids: set   = set()
-    pouch_best_frame: dict = {}   # pid -> (frame, pouch_dict) 오류 봉지 사진용
-    CONFIRM_DELAY         = 8
-    t_start               = time.time()
+    state              = _make_batch_state(batch_start_frame=0)
+    batches: list      = []
+    frame_idx          = 0
+    no_pouch_det_count = 0
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         run_det = (frame_idx % det_skip == 0)
-        run_ocr = False
-        if run_det or run_ocr:
-            last_pouches = process_frame(frame, run_det=run_det, run_ocr=run_ocr,
-                                         last_pouches=last_pouches)
+
         if run_det:
-            tracker.update(last_pouches, frame_w=width)
-            curr_pouch_ids = {p['pouch_id'] for p in last_pouches if p['pouch_id']}
-            stabilizer.update(last_pouches)
-            for p in last_pouches:
+            state['last_pouches'] = process_frame(
+                frame, run_det=True, run_ocr=False,
+                last_pouches=state['last_pouches']
+            )
+            state['tracker'].update(state['last_pouches'], frame_w=width)
+            curr_pouch_ids = {p['pouch_id'] for p in state['last_pouches'] if p['pouch_id']}
+            state['stabilizer'].update(state['last_pouches'])
+
+            for p in state['last_pouches']:
                 pid = p['pouch_id']
                 if pid is None:
                     continue
                 count = p['summary']['total']
                 if count > 0:
-                    count_history.setdefault(pid, []).append(count)
-                    pouch_best_frame[pid] = (frame.copy(), dict(p))
-            for pid in prev_pouch_ids - curr_pouch_ids:
-                pending_confirm.setdefault(pid, 0)
-            for pid in curr_pouch_ids & set(pending_confirm):
-                del pending_confirm[pid]
+                    state['count_history'].setdefault(pid, []).append(count)
+                    state['pouch_best_frame'][pid] = (frame.copy(), dict(p))
+
+            for pid in state['prev_pouch_ids'] - curr_pouch_ids:
+                state['pending_confirm'].setdefault(pid, 0)
+            for pid in curr_pouch_ids & set(state['pending_confirm']):
+                del state['pending_confirm'][pid]
             to_confirm = []
-            for pid in list(pending_confirm):
-                pending_confirm[pid] += 1
-                if pending_confirm[pid] >= CONFIRM_DELAY:
+            for pid in list(state['pending_confirm']):
+                state['pending_confirm'][pid] += 1
+                if state['pending_confirm'][pid] >= CONFIRM_DELAY:
                     to_confirm.append(pid)
-                    del pending_confirm[pid]
+                    del state['pending_confirm'][pid]
             for pid in to_confirm:
-                history = count_history.pop(pid, [])
+                history = state['count_history'].pop(pid, [])
                 if len(history) < 13:
                     continue
                 final_count = max(set(history), key=history.count)
-                pattern_monitor.record(pid, final_count, history=history)
-            prev_pouch_ids = curr_pouch_ids
+                state['pattern_monitor'].record(pid, final_count, history=history)
 
-        if ffmpeg_proc is not None:
-            annotated = draw_results(frame, last_pouches)
-            ffmpeg_proc.stdin.write(annotated.tobytes())
+            state['prev_pouch_ids'] = curr_pouch_ids
+
+            # 이번 프레임에 실제 탐지된 알약이 있을 때만 리셋 (carry-over summary 제외)
+            has_pills = any(
+                len(p.get('detections', [])) > 0
+                for p in state['last_pouches']
+            )
+            if has_pills:
+                no_pouch_det_count = 0
+            elif state['pattern_monitor'].records or state['count_history']:
+                no_pouch_det_count += 1
+
+            # 5초 무탐지 → 배치 분리
+            if no_pouch_det_count >= NO_POUCH_GAP_DET:
+                _force_confirm_pending(state)
+                elapsed = int((frame_idx - state['batch_start_frame']) / fps)
+                batch = _finalize_batch(
+                    state['pattern_monitor'], state['pouch_best_frame'], elapsed
+                )
+                if batch:
+                    batches.append(batch)
+                    print(f"  [배치 {len(batches)} 완료] 봉지 {len(batch['pouches'])}개  오류 {len(batch['errorPouchNumbers'])}개")
+
+                state              = _make_batch_state(batch_start_frame=frame_idx)
+                no_pouch_det_count = 0
 
         frame_idx += 1
 
     cap.release()
-    if ffmpeg_proc is not None:
-        ffmpeg_proc.stdin.close()
-        ffmpeg_proc.wait()
 
-    elapsed        = int(time.time() - t_start)
-    records        = pattern_monitor.records
-    final_pattern  = pattern_monitor.pattern
-    sorted_records = sorted(records, key=lambda r: r['pouch_id'])
-    if final_pattern:
-        for i, r in enumerate(sorted_records):
-            exp = final_pattern[i % len(final_pattern)]
-            r['expected'] = exp
-            r['error']    = (r['count'] != exp)
-    errors = [r for r in sorted_records if r.get('error')]
+    # 마지막 배치 확정
+    _force_confirm_pending(state)
+    elapsed = int((frame_idx - state['batch_start_frame']) / fps)
+    batch = _finalize_batch(state['pattern_monitor'], state['pouch_best_frame'], elapsed)
+    if batch:
+        batches.append(batch)
+        print(f"  [배치 {len(batches)} 완료] 봉지 {len(batch['pouches'])}개  오류 {len(batch['errorPouchNumbers'])}개")
 
-    error_crops: dict = {}
-    for r in errors:
-        pid = r['pouch_id']
-        if pid in pouch_best_frame:
-            f, p = pouch_best_frame[pid]
-            crop = f[p['y_start']:p['y_end'], p['x_start']:p['x_end']]
-            for d in p.get('detections', []):
-                bx1, by1, bx2, by2 = [int(v) for v in d['bbox']]
-                cv2.rectangle(crop, (bx1, by1), (bx2, by2), (0, 200, 255), 2)
-            _, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            error_crops[str(pid)] = base64.b64encode(buf).decode()
-
-    # 대표 썸네일 — 정상 봉지 중 첫 번째, 없으면 오류 봉지 중 첫 번째
-    error_pids = {r['pouch_id'] for r in errors}
-    normal_records = [r for r in sorted_records if r['pouch_id'] not in error_pids]
-    thumbnail_candidates = normal_records if normal_records else sorted_records
-    thumbnail_crop = None
-    for r in thumbnail_candidates:
-        pid = r['pouch_id']
-        if pid in pouch_best_frame:
-            f, p = pouch_best_frame[pid]
-            crop = f[p['y_start']:p['y_end'], p['x_start']:p['x_end']]
-            _, buf = cv2.imencode('.jpg', crop, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            thumbnail_crop = base64.b64encode(buf).decode()
-            break
-
-    return {
-        'isError':           len(errors) > 0,
-        'errorPouchNumbers': [r['pouch_id'] for r in errors],
-        'elapsedSeconds':    elapsed,
-        'pattern':           final_pattern,
-        'errorCrops':        error_crops,
-        'thumbnailCrop':     thumbnail_crop,
-        'pouches': [
-            {'pouchId':  r['pouch_id'],
-             'count':    r['count'],
-             'expected': r.get('expected'),
-             'error':    r.get('error', False)}
-            for r in sorted_records
-        ],
-    }
+    print(f"\n분석 완료: 총 {len(batches)}개 배치")
+    return {'batches': batches}
 
 
 if __name__ == '__main__':

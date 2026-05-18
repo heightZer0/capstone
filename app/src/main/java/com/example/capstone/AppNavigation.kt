@@ -7,8 +7,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.capstone.screen.*
 import com.example.capstone.StatisticsViewModel
-import com.example.capstone.viewmodel.DispenseViewModel
-import androidx.compose.runtime.LaunchedEffect
 
 // ── 라우트 상수 ───────────────────────────────────────────────────
 object Routes {
@@ -17,7 +15,6 @@ object Routes {
     const val HOME        = "home"
     const val STATISTICS  = "statistics"
     const val DETAIL      = "detail"
-    const val VIDEO       = "video"
     const val CAMERA      = "camera"
     const val LOADING     = "loading"
     const val RESULT      = "result"
@@ -31,7 +28,6 @@ fun AppNavigation() {
     // Camera → Loading → Result 사이에 공유되는 ViewModel
     // (NavGraph 스코프이므로 세 화면 모두 같은 인스턴스를 사용)
     val inspectionVm: InspectionSharedViewModel = viewModel()
-    val dispenseVm: DispenseViewModel = viewModel()
 
     NavHost(
         navController  = navController,
@@ -127,35 +123,15 @@ fun AppNavigation() {
 
         // ── Result ──────────────────────────────────────────────
         composable(Routes.RESULT) {
-            val result = inspectionVm.inspectionResult
-            val videoUrl = result?.videoId?.let { "${inspectionVm.serverUrl}/video/$it" }
-
-            if (result == null) {
+            val results = inspectionVm.inspectionResults
+            if (results.isEmpty()) {
                 HomeScreen(
                     onStartClick      = { navController.navigate(Routes.CAMERA) },
                     onStatisticsClick = {}
                 )
-            } else if (result.isError) {
-                ErrorResultScreen(
-                    result          = result,
-                    onRetakeCapture = {
-                        inspectionVm.resetAnalysis()
-                        navController.navigate(Routes.CAMERA) {
-                            popUpTo(Routes.HOME) { inclusive = false }
-                        }
-                    },
-                    onGoHome        = {
-                        navController.navigate(Routes.HOME) {
-                            popUpTo(Routes.HOME) { inclusive = true }
-                        }
-                    },
-                    onWatchVideo    = videoUrl?.let { url ->
-                        { navController.navigate("${Routes.VIDEO}?url=${java.net.URLEncoder.encode(url, "UTF-8")}") }
-                    }
-                )
             } else {
-                NormalResultScreen(
-                    result          = result,
+                BatchResultScreen(
+                    results         = results,
                     onRetakeCapture = {
                         inspectionVm.resetAnalysis()
                         navController.navigate(Routes.CAMERA) {
@@ -166,23 +142,9 @@ fun AppNavigation() {
                         navController.navigate(Routes.HOME) {
                             popUpTo(Routes.HOME) { inclusive = true }
                         }
-                    },
-                    onWatchVideo    = videoUrl?.let { url ->
-                        { navController.navigate("${Routes.VIDEO}?url=${java.net.URLEncoder.encode(url, "UTF-8")}") }
                     }
                 )
             }
-        }
-
-        // ── Video Player ─────────────────────────────────────────
-        composable("${Routes.VIDEO}?url={url}") { backStackEntry ->
-            val url = backStackEntry.arguments?.getString("url")?.let {
-                java.net.URLDecoder.decode(it, "UTF-8")
-            } ?: ""
-            VideoPlayerScreen(
-                videoUrl = url,
-                onBack   = { navController.popBackStack() }
-            )
         }
     }
 }

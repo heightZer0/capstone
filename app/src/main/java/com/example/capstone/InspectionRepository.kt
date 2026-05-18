@@ -15,30 +15,41 @@ import java.util.concurrent.TimeUnit
 
 // ─── Repository 인터페이스 ─────────────────────────────────────────
 interface InspectionRepository {
-    suspend fun analyze(elapsedSeconds: Int): InspectionResult
+    suspend fun analyze(elapsedSeconds: Int): List<InspectionResult>
 }
 
 // ─── 더미 Repository ──────────────────────────────────────────────
 class DummyInspectionRepository : InspectionRepository {
-    override suspend fun analyze(elapsedSeconds: Int): InspectionResult {
+    override suspend fun analyze(elapsedSeconds: Int): List<InspectionResult> {
         delay(2_500L)
-        return InspectionResult(
-            isError           = true,
-            errorPouchNumbers = listOf(3, 7),
-            elapsedSeconds    = elapsedSeconds,
-            totalPouches      = 10,
-            pattern           = listOf(2, 2, 1),
-            pouches           = listOf(
-                PouchResult(1, 2, 2, false),
-                PouchResult(2, 2, 2, false),
-                PouchResult(3, 1, 2, true),
-                PouchResult(4, 2, 1, false),
-                PouchResult(5, 2, 2, false),
-                PouchResult(6, 2, 2, false),
-                PouchResult(7, 3, 1, true),
-                PouchResult(8, 2, 2, false),
-                PouchResult(9, 1, 2, false),
-                PouchResult(10, 2, 1, false),
+        return listOf(
+            InspectionResult(
+                isError           = false,
+                errorPouchNumbers = emptyList(),
+                elapsedSeconds    = elapsedSeconds,
+                totalPouches      = 5,
+                pattern           = listOf(2, 2, 1),
+                pouches           = listOf(
+                    PouchResult(1, 2, 2, false),
+                    PouchResult(2, 2, 2, false),
+                    PouchResult(3, 1, 2, false),
+                    PouchResult(4, 2, 2, false),
+                    PouchResult(5, 1, 1, false),
+                )
+            ),
+            InspectionResult(
+                isError           = true,
+                errorPouchNumbers = listOf(3, 5),
+                elapsedSeconds    = elapsedSeconds,
+                totalPouches      = 5,
+                pattern           = listOf(2, 2, 1),
+                pouches           = listOf(
+                    PouchResult(1, 2, 2, false),
+                    PouchResult(2, 2, 2, false),
+                    PouchResult(3, 1, 2, true),
+                    PouchResult(4, 2, 1, false),
+                    PouchResult(5, 3, 1, true),
+                )
             )
         )
     }
@@ -51,7 +62,7 @@ class ApiInspectionRepository(
     private val serverUrl: String,
     private val videoFile: File
 ) : InspectionRepository {
-    override suspend fun analyze(elapsedSeconds: Int): InspectionResult = withContext(Dispatchers.IO) {
+    override suspend fun analyze(elapsedSeconds: Int): List<InspectionResult> = withContext(Dispatchers.IO) {
         val client = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(300, TimeUnit.SECONDS)
@@ -75,44 +86,55 @@ class ApiInspectionRepository(
         val response = client.newCall(request).execute()
         if (!response.isSuccessful) throw IOException("서버 오류: ${response.code}")
 
-        val json         = JSONObject(response.body!!.string())
-        val errorArray   = json.getJSONArray("errorPouchNumbers")
-        val pouchesArray = json.optJSONArray("pouches")
-        val patternArray = json.optJSONArray("pattern")
-        val cropsObject  = json.optJSONObject("errorCrops")
+        val responseStr = response.body!!.string()
+        val json = JSONObject(responseStr)
 
-        val pattern = if (patternArray != null)
-            (0 until patternArray.length()).map { patternArray.getInt(it) }
-        else emptyList()
+        // 새 형식: {"batches": [...]} / 예전 형식: {"isError": ..., "pouches": [...]}
+        val batchesArray = json.optJSONArray("batches")
+        val batchJsonList = if (batchesArray != null) {
+            (0 until batchesArray.length()).map { batchesArray.getJSONObject(it) }
+        } else {
+            listOf(json)  // 예전 형식 → 배치 1개로 처리
+        }
 
-        val pouches = if (pouchesArray != null)
-            (0 until pouchesArray.length()).map { i ->
-                val p = pouchesArray.getJSONObject(i)
-                PouchResult(
-                    pouchId  = p.getInt("pouchId"),
-                    count    = p.getInt("count"),
-                    expected = if (p.isNull("expected")) null else p.getInt("expected"),
-                    error    = p.getBoolean("error")
-                )
-            }
-        else emptyList()
+        batchJsonList.map { b ->
+            val errorArray   = b.getJSONArray("errorPouchNumbers")
+            val pouchesArray = b.optJSONArray("pouches")
+            val patternArray = b.optJSONArray("pattern")
+            val cropsObject  = b.optJSONObject("errorCrops")
 
-        val errorCrops: Map<Int, String> = if (cropsObject != null)
-            cropsObject.keys().asSequence().associate { key ->
-                key.toInt() to cropsObject.getString(key)
-            }
-        else emptyMap()
+            val pattern = if (patternArray != null)
+                (0 until patternArray.length()).map { patternArray.getInt(it) }
+            else emptyList()
 
-        InspectionResult(
-            isError           = json.getBoolean("isError"),
-            errorPouchNumbers = (0 until errorArray.length()).map { errorArray.getInt(it) },
-            elapsedSeconds    = json.getInt("elapsedSeconds"),
-            totalPouches      = pouchesArray?.length() ?: 0,
-            pattern           = pattern,
-            pouches           = pouches,
-            videoId           = json.optString("videoId").takeIf { it.isNotBlank() },
-            errorCrops        = errorCrops,
-            thumbnailCrop     = json.optString("thumbnailCrop").takeIf { it.isNotBlank() }
-        )
+            val pouches = if (pouchesArray != null)
+                (0 until pouchesArray.length()).map { j ->
+                    val p = pouchesArray.getJSONObject(j)
+                    PouchResult(
+                        pouchId  = p.getInt("pouchId"),
+                        count    = p.getInt("count"),
+                        expected = if (p.isNull("expected")) null else p.getInt("expected"),
+                        error    = p.getBoolean("error")
+                    )
+                }
+            else emptyList()
+
+            val errorCrops: Map<Int, String> = if (cropsObject != null)
+                cropsObject.keys().asSequence().associate { key ->
+                    key.toInt() to cropsObject.getString(key)
+                }
+            else emptyMap()
+
+            InspectionResult(
+                isError           = b.getBoolean("isError"),
+                errorPouchNumbers = (0 until errorArray.length()).map { errorArray.getInt(it) },
+                elapsedSeconds    = b.getInt("elapsedSeconds"),
+                totalPouches      = pouchesArray?.length() ?: 0,
+                pattern           = pattern,
+                pouches           = pouches,
+                errorCrops        = errorCrops,
+                thumbnailCrop     = b.optString("thumbnailCrop").takeIf { it.isNotBlank() }
+            )
+        }
     }
 }

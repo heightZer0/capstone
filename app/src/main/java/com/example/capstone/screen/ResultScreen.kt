@@ -39,14 +39,89 @@ private val TextPrimary   = Color(0xFF111827)
 private val TextSecondary = Color(0xFF6B7280)
 
 // ════════════════════════════════════════════════════════════════
+// 연속 촬영 배치 결과 화면 (여러 환자 한 번에 표시)
+// ════════════════════════════════════════════════════════════════
+@Composable
+fun BatchResultScreen(
+    results: List<InspectionResult>,
+    onRetakeCapture: () -> Unit,
+    onGoHome: () -> Unit
+) {
+    val hasAnyError = results.any { it.isError }
+    val bannerColor = if (hasAnyError) ErrorRed else NormalGreen
+    val bannerIcon  = if (hasAnyError) "✕" else "✓"
+    val bannerTitle = if (hasAnyError) "오류 발견" else "검사 정상"
+    val bannerSub   = if (hasAnyError) "${results.sumOf { it.errorPouchNumbers.size }}건 오류 · ${results.size}명 검사"
+                      else "${results.size}명 검사 · 모두 정상"
+
+    Box(modifier = Modifier.fillMaxSize().background(PageBg)) {
+        LazyColumn(
+            modifier       = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 160.dp)
+        ) {
+            // ── 상단 배너 ─────────────────────────────────────────
+            item {
+                Surface(color = bannerColor, modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier              = Modifier
+                            .statusBarsPadding()
+                            .padding(horizontal = 20.dp, vertical = 18.dp),
+                        verticalAlignment     = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Surface(shape = CircleShape, color = Color.White.copy(alpha = 0.22f),
+                                modifier = Modifier.size(44.dp)) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(bannerIcon, color = Color.White, fontSize = 20.sp,
+                                     fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Column {
+                            Text(bannerTitle, color = Color.White, fontSize = 18.sp,
+                                 fontWeight = FontWeight.Bold)
+                            Text(bannerSub,
+                                 color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+
+            // ── 배치별 아코디언 카드 ──────────────────────────────
+            results.forEachIndexed { batchIdx, result ->
+                item(key = "batch_$batchIdx") {
+                    BatchCard(
+                        result    = result,
+                        batchNo   = batchIdx + 1,
+                        expanded  = result.isError  // 오류면 기본 펼침, 정상이면 기본 접힘
+                    )
+                }
+            }
+        }
+
+        // ── 하단 버튼 (고정) ──────────────────────────────────────
+        Surface(
+            modifier        = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+            color           = Color.White,
+            shadowElevation = 8.dp
+        ) {
+            ResultButtonGroup(
+                primaryLabel   = "다시 촬영하기",
+                onPrimary      = onRetakeCapture,
+                secondaryLabel = "홈으로 돌아가기",
+                onSecondary    = onGoHome
+            )
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
 // 오류 결과 화면
 // ════════════════════════════════════════════════════════════════
 @Composable
 fun ErrorResultScreen(
     result: InspectionResult,
     onRetakeCapture: () -> Unit,
-    onGoHome: () -> Unit,
-    onWatchVideo: (() -> Unit)? = null
+    onGoHome: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -124,8 +199,7 @@ fun ErrorResultScreen(
                 primaryLabel   = "다시 촬영하기",
                 onPrimary      = onRetakeCapture,
                 secondaryLabel = "홈으로 돌아가기",
-                onSecondary    = onGoHome,
-                onWatchVideo   = onWatchVideo
+                onSecondary    = onGoHome
             )
         }
     }
@@ -138,8 +212,7 @@ fun ErrorResultScreen(
 fun NormalResultScreen(
     result: InspectionResult,
     onRetakeCapture: () -> Unit,
-    onGoHome: () -> Unit,
-    onWatchVideo: (() -> Unit)? = null
+    onGoHome: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -207,8 +280,7 @@ fun NormalResultScreen(
                 primaryLabel   = "다시 촬영하기",
                 onPrimary      = onRetakeCapture,
                 secondaryLabel = "홈으로 돌아가기",
-                onSecondary    = onGoHome,
-                onWatchVideo   = onWatchVideo
+                onSecondary    = onGoHome
             )
         }
     }
@@ -240,6 +312,9 @@ private fun SummaryCard(result: InspectionResult, modifier: Modifier = Modifier)
                     valueColor = ErrorRed)
             if (result.pattern.isNotEmpty())
                 InfoRow("복약 패턴", patternDesc(result.pattern))
+            else
+                InfoRow("복약 패턴", "패턴 미감지 (봉지 수 부족)",
+                    valueColor = TextSecondary)
         }
     }
 }
@@ -350,6 +425,96 @@ private fun PouchRow(pouch: PouchResult, displayIndex: Int, cropBase64: String?)
     }
 }
 
+// ════════════════════════════════════════════════════════════════
+// 환자 1명 아코디언 카드
+// ════════════════════════════════════════════════════════════════
+@Composable
+private fun BatchCard(result: InspectionResult, batchNo: Int, expanded: Boolean) {
+    var isExpanded by remember { mutableStateOf(expanded) }
+    val accentColor = if (result.isError) ErrorRed else NormalGreen
+    val statusText  = if (result.isError) "오류 ${result.errorPouchNumbers.size}개" else "정상"
+    val arrowIcon   = if (isExpanded) "▲" else "▼"
+
+    Card(
+        modifier  = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        shape     = RoundedCornerShape(14.dp),
+        colors    = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column {
+            // ── 헤더 (항상 표시, 탭하면 토글) ────────────────────
+            Row(
+                modifier              = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded }
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(shape = CircleShape, color = accentColor,
+                            modifier = Modifier.size(36.dp)) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(if (result.isError) "✕" else "✓",
+                                 color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Column {
+                        Text("${batchNo}번 환자",
+                             fontWeight = FontWeight.Bold, fontSize = 15.sp, color = TextPrimary)
+                        Text(statusText, fontSize = 13.sp, color = accentColor)
+                    }
+                }
+                Text(arrowIcon, fontSize = 12.sp, color = TextSecondary)
+            }
+
+            // ── 펼쳐진 내용 ───────────────────────────────────────
+            if (isExpanded) {
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+
+                // 썸네일
+                ThumbnailCard(result.thumbnailCrop,
+                              modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+
+                // 요약
+                SummaryCard(result,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+
+                // 봉지별 결과
+                if (result.pouches.isNotEmpty()) {
+                    Text(
+                        "봉지별 결과 (${result.pouches.size}개)",
+                        fontSize   = 14.sp, fontWeight = FontWeight.SemiBold,
+                        color      = TextSecondary,
+                        modifier   = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                    )
+                    result.pouches.forEachIndexed { idx, pouch ->
+                        PouchRow(pouch        = pouch,
+                                 displayIndex = idx + 1,
+                                 cropBase64   = result.errorCrops[pouch.pouchId])
+                    }
+                } else if (result.errorPouchNumbers.isNotEmpty()) {
+                    Text("오류 봉지", fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                         color    = TextSecondary,
+                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+                    result.errorPouchNumbers.forEachIndexed { idx, pouchId ->
+                        PouchRow(pouch        = PouchResult(pouchId, 0, null, true),
+                                 displayIndex = idx + 1,
+                                 cropBase64   = null)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
 @Composable
 private fun FullscreenImageDialog(bitmap: ImageBitmap, onDismiss: () -> Unit) {
     Dialog(
@@ -436,8 +601,7 @@ private fun ResultButtonGroup(
     primaryLabel: String,
     onPrimary: () -> Unit,
     secondaryLabel: String,
-    onSecondary: () -> Unit,
-    onWatchVideo: (() -> Unit)? = null
+    onSecondary: () -> Unit
 ) {
     Column(
         modifier            = Modifier
@@ -446,16 +610,6 @@ private fun ResultButtonGroup(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        if (onWatchVideo != null) {
-            Button(
-                onClick  = onWatchVideo,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape    = RoundedCornerShape(14.dp),
-                colors   = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C3AED))
-            ) {
-                Text("결과 영상 보기", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
         Button(
             onClick  = onPrimary,
             modifier = Modifier.fillMaxWidth().height(52.dp),

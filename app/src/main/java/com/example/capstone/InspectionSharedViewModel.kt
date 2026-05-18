@@ -47,8 +47,8 @@ class InspectionSharedViewModel(application: Application) : AndroidViewModel(app
     val elapsedSeconds: StateFlow<Int> = _elapsedSeconds
     private var timerJob: Job? = null
 
-    // 최종 검사 결과
-    var inspectionResult: InspectionResult? by mutableStateOf(null)
+    // 최종 검사 결과 (배치 목록)
+    var inspectionResults: List<InspectionResult> by mutableStateOf(emptyList())
         private set
 
     // 분석 완료 여부 (LoadingScreen → ResultScreen 전환 신호)
@@ -106,16 +106,16 @@ class InspectionSharedViewModel(application: Application) : AndroidViewModel(app
 
         viewModelScope.launch {
             try {
-                val result = repo.analyze(elapsedSeconds)
-                inspectionResult = result
-                saveResultToDb(result)
+                val results = repo.analyze(elapsedSeconds)
+                inspectionResults = results
+                results.forEach { saveResultToDb(it) }
             } catch (e: Exception) {
                 val fallback = InspectionResult(
                     isError = true,
                     errorPouchNumbers = emptyList(),
                     elapsedSeconds = elapsedSeconds
                 )
-                inspectionResult = fallback
+                inspectionResults = listOf(fallback)
                 saveResultToDb(fallback)
             }
             isAnalysisComplete = true
@@ -130,6 +130,7 @@ class InspectionSharedViewModel(application: Application) : AndroidViewModel(app
                 errorCount   = result.errorPouchNumbers.size
             )
         ).toInt()
+        android.util.Log.d("DB_SAVE", "저장됨: analysisId=$analysisId totalPouches=${result.totalPouches}")
         if (result.errorPouchNumbers.isNotEmpty()) {
             db.errorObjectDao().insertErrorObjects(
                 result.errorPouchNumbers.map { pouchNo ->
@@ -146,7 +147,7 @@ class InspectionSharedViewModel(application: Application) : AndroidViewModel(app
 
     fun resetAnalysis() {
         isAnalysisComplete = false
-        inspectionResult = null
+        inspectionResults = emptyList()
         videoFile = null
         _elapsedSeconds.value = 0
         isResultSavedToDb = false
